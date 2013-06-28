@@ -6,8 +6,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Cassette.IO;
+using Cassette.Scripts;
 using Cassette.Utilities;
 using Trace = Cassette.Diagnostics.Trace;
 
@@ -198,7 +200,8 @@ namespace Cassette
                 }
                 else
                 {
-                    throw new DirectoryNotFoundException(string.Format("Bundle path not found: {0}", applicationRelativePath));
+                    throw new DirectoryNotFoundException(string.Format("Bundle path not found: {0}",
+                                                                         applicationRelativePath));
                 }
             }
 
@@ -371,12 +374,13 @@ namespace Cassette
             fileSearch = fileSearch ?? fileSearchProvider.GetFileSearch(typeof(T));
 
             var bundleFactory = bundleFactoryProvider.GetBundleFactory<T>();
+
             var parentDirectory = settings.SourceDirectory.GetDirectory(applicationRelativePath);
 
-            if (!excludeTopLevel)
+            if (!excludeTopLevel && this.bundles.All(x => x.Path != applicationRelativePath))
             {
                 var topLevelFiles = fileSearch.FindFiles(parentDirectory)
-                    .Where(f => f.Directory.Equals(parentDirectory))
+                    .Where(f => f.Directory.FullPath == parentDirectory.FullPath)
                     .ToArray();
                 var directoryBundle = CreateDirectoryBundle(applicationRelativePath, bundleFactory, topLevelFiles, parentDirectory);
                 if (topLevelFiles.Any() || directoryBundle is IExternalBundle)
@@ -389,7 +393,8 @@ namespace Cassette
             var directories = parentDirectory.GetDirectories().Where(IsNotHidden);
             foreach (var directory in directories)
             {
-                Trace.Source.TraceInformation(string.Format("Creating {0} for {1}", typeof(T).Name, directory.FullPath));
+                if (this.bundles.Any(x => x.Path == directory.FullPath)) continue;
+                Trace.Source.TraceInformation(string.Format("Creating {0} for {1}", typeof (T).Name, directory.FullPath));
                 var allFiles = fileSearch.FindFiles(directory).ToArray();
 
                 var descriptorFile = TryGetDescriptorFile<T>(directory);
@@ -553,6 +558,7 @@ namespace Cassette
             var bundleFactory = bundleFactoryProvider.GetBundleFactory<T>();
             foreach (var file in files)
             {
+                if (bundles.Any(x => x.Path == file.FullPath)) continue;
                 var bundle = bundleFactory.CreateBundle(
                     file.FullPath,
                     new[] { file },
@@ -722,7 +728,7 @@ namespace Cassette
         {
             var notFound = from bundle in bundles
                            from reference in bundle.References
-                           where bundles.Any(m => m.ContainsPath(reference)) == false
+                           where bundles.Any(m => m.ContainsPath(reference) || m.ContainsPath(Regex.Replace(reference, @"~\/[^\/]+\/", "~/_default/"))) == false
                            select string.Format(
                                "Reference error in bundle descriptor for \"{0}\". Cannot find \"{1}\".",
                                bundle.Path,
@@ -761,18 +767,20 @@ namespace Cassette
 
         Dictionary<Bundle, HashedSet<Bundle>> BuildBundleImmediateReferenceDictionary()
         {
-            return (
-                from bundle in bundles
-                select new
-                {
-                    bundle,
-                    references = new HashedSet<Bundle>(GetNonSameBundleAssetReferences(bundle)
+          var result = new Dictionary<Bundle, HashedSet<Bundle>>();
+          foreach (var bundle in bundles)
+          {
+            IEnumerable<string> newReferences = new List<string>();
+            if (!bundle.Path.StartsWith("~/_default/"))
+            {
+              newReferences = bundle.References.Select(reference => Regex.Replace(reference, @"~\/[^\/]+\/", "~/_default/"));
+            }
+            result.Add(bundle, new HashedSet<Bundle>(GetNonSameBundleAssetReferences(bundle)
                         .Select(r => r.ToPath)
-                        .Concat(bundle.References)
-                        .SelectMany(FindBundlesContainingPath).ToList()
-                    )
-                }
-            ).ToDictionary(x => x.bundle, x => x.references);
+                        .Concat(bundle.References.Union(newReferences))
+                        .SelectMany(FindBundlesContainingPath).ToList()));
+          }
+          return result;
         }
 
         IEnumerable<AssetReference> GetNonSameBundleAssetReferences(Bundle bundle)

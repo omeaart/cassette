@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Cassette.Scripts;
 using Cassette.Stylesheets;
 using Cassette.Utilities;
@@ -107,6 +108,16 @@ namespace Cassette
 
             if (bundles.Length == 0)
             {
+                path = Regex.Replace(path, @"~\/[^\/]+\/", "~/_default/");
+                bundles = allBundles.FindBundlesContainingPath(path).ToArray();
+                if (bundles.Length == 0 && path.IsUrl())
+                {
+                  var bundle = createExternalBundle();
+                  bundle.Process(settings);
+                  bundles = new[] { bundle };
+                }
+                if (bundles.Length > 0) return bundles;
+
                 throw new ArgumentException("Cannot find an asset bundle containing the path \"" + path + "\".");
             }
 

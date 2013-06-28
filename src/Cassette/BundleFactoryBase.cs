@@ -64,6 +64,10 @@ namespace Cassette
             {
                 return file;
             }
+            if (filesByPath.TryGetValue(Regex.Replace(filename, @"~\/[^\/]+\/", "~/_default/"), out file))
+            {
+                return file;
+            }
 
             ThrowIfShouldReferenceNonMinFile(bundle, filename, filesByPath);
             ThrowIfShouldReferenceDebugFile(bundle, filename, filesByPath);
